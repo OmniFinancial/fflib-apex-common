@@ -1,4 +1,11 @@
-
 *.prefs
-
 fflib/salesforce.schema
+
+#ignore thumbnails created by windows
+Thumbs.db
+#ignore files dedicated to vscode and it's extensions
+.vscode/
+force.json
+.vim-force.com/
+#ignore generated documentation
+docs/ApexDocumentation
