@@ -87,13 +87,15 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 		// System.assertEquals(5 /* Oddly a setSavePoint consumes a DML */, Limits.getDmlStatements());
 
 		// Records to update
-		Map<Id, Opportunity> origMapOfOpps = new Map<Id, Opportunity>([select Id, Name, Description, (Select Id, Quantity, TotalPrice from OpportunityLineItems) from Opportunity where Id in :subjectOpportunityIds]);
+		Map<Id, Opportunity> originalOpportunities = new Map<Id, Opportunity>([select Id, Name, Description, (Select Id, Quantity, TotalPrice from OpportunityLineItems) from Opportunity where Id in :subjectOpportunityIds]);
 		
 		Product2 product;
+		Id changedOppId = subjectOpportunityIds[0];
+		Id newOppLineItemId;
 		// Update some records with UnitOfWork
 		{
 			fflib_SObjectUnitOfWork uow = new fflib_SObjectUnitOfWork(MY_SOBJECTS);	
-			Opportunity opp = origMapOfOpps.get(subjectOpportunityIds[0]);
+			Opportunity opp = originalOpportunities.get(changedOppId);
 			opp.Description = 'This is a NEW Description';
 			uow.registerDirty(new List<SObject>{opp});
 			product = new Product2();
@@ -106,7 +108,6 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 			pbe.Pricebook2Id = Test.getStandardPricebookId();
 			uow.registerNew(pbe, PricebookEntry.Product2Id, product);
 			OpportunityLineItem newOppLineItem = new OpportunityLineItem();
-			origMapOfOpps.get(opp.Id).OpportunityLineItems.add(newOppLineItem);
 			newOppLineItem.Quantity = 3;
 			newOppLineItem.TotalPrice = 30;
 			uow.registerRelationship(newOppLineItem, OpportunityLineItem.PricebookEntryId, pbe);
@@ -119,44 +120,47 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 			existingOppLine.TotalPrice = 20;
 			uow.registerDirty(new List<SObject>{existingOppLine});
 			uow.commitWork();
+			newOppLineItemId = newOppLineItem.Id;
 		}
 		
 		// Assert Results
 		// TODO: Need to re-instate this check with a better approach, as it is not possible when 
 		//       product triggers contribute to DML (e.g. in sample app Opportunity trigger)
 		// System.assertEquals(11, Limits.getDmlStatements());
-		Map<Id, Opportunity> mapOfOpps = new Map<Id, Opportunity>([select Id, Name, Description, (Select Id, PricebookEntry.Product2.Name, Quantity, TotalPrice from OpportunityLineItems Order By Id) from Opportunity where Id in :origMapOfOpps.keySet()]);
-		System.assertEquals(10, mapOfOpps.keySet().size());
-		for(Opportunity originalOpportunity : origMapOfOpps.values()){
-			System.assertEquals(originalOpportunity.Description, mapOfOpps.get(originalOpportunity.Id).Description);
-			System.assertEquals(originalOpportunity.OpportunityLineItems.size(), mapOfOpps.get(originalOpportunity.id).OpportunityLineItems.size());
+		Map<Id, Opportunity> resultOpportunities = new Map<Id, Opportunity>([select Id, Name, Description, (Select Id, PricebookEntry.Product2.Name, Quantity, TotalPrice from OpportunityLineItems Order By Id) from Opportunity where Id in :originalOpportunities.keySet()]);
+		System.assertEquals(10, resultOpportunities.size());
+		for(Opportunity resultOpportunity : resultOpportunities.values()){
+			Opportunity originalOpportunity = originalOpportunities.get(resultOpportunity.Id);
+			System.assertEquals(originalOpportunity.Description, resultOpportunity.Description);
+			Integer expectedLineItemListSize = originalOpportunity.OpportunityLineItems.size();
+			if(originalOpportunity.Id == changedOppId) expectedLineItemListSize++;
+			System.assertEquals(expectedLineItemListSize, resultOpportunity.OpportunityLineItems.size());
 			for(OpportunityLineItem originalLineItem : originalOpportunity.OpportunityLineItems){
-				Map<Id, OpportunityLineItem> mapOfLineItems = new Map<Id, OpportunityLineItem>(mapOfOpps.get(originalOpportunity.Id).OpportunityLineItems);
+				Map<Id, OpportunityLineItem> mapOfLineItems = new Map<Id, OpportunityLineItem>(resultOpportunities.get(originalOpportunity.Id).OpportunityLineItems);
 				System.assertEquals(originalLineItem.Quantity, mapOfLineItems.get(originalLineItem.Id).Quantity);
 				System.assertEquals(originalLineItem.TotalPrice, mapOfLineItems.get(originalLineItem.Id).TotalPrice);
 			}
 		}
 		/**
-		System.assertEquals('This is a NEW Description', mapOfOpps.get(subjectOpportunityIds[0]).Description);
-		System.assertEquals(2, mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems.size());
+		System.assertEquals('This is a NEW Description', resultOpportunities.get(changedOppId).Description);
+		System.assertEquals(2, resultOpportunities.get(changedOppId).OpportunityLineItems.size());
 		// Verify that both fields were updated properly
-		System.assertEquals(1, mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[0].Quantity);
-		System.assertEquals(20, mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[0].TotalPrice);
+		System.assertEquals(1, resultOpportunities.get(changedOppId).OpportunityLineItems[0].Quantity);
+		System.assertEquals(20, resultOpportunities.get(changedOppId).OpportunityLineItems[0].TotalPrice);
 		**/
-		System.assertEquals('New Product: ' + subjectOpportunityIds[0], new Map<Id, OpportunityLineItem>(mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems).get(product.Id).PricebookEntry.Product2.Name);
-		
+		System.assertEquals('New Product: ' + changedOppId, new Map<Id, OpportunityLineItem>(resultOpportunities.get(changedOppId).OpportunityLineItems).get(newOppLineItemId).PricebookEntry.Product2.Name);
 
 		// Delete some records with the UnitOfWork
 		{
 			fflib_SObjectUnitOfWork uow = new fflib_SObjectUnitOfWork(MY_SOBJECTS);	
-			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1].PricebookEntry.Product2}); // Delete PricebookEntry Product 
-			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1].PricebookEntry}); // Delete PricebookEntry
-			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1]}); // Delete OpportunityLine Item
+			uow.registerDeleted(new List<SObject>{resultOpportunities.get(changedOppId).OpportunityLineItems[1].PricebookEntry.Product2}); // Delete PricebookEntry Product 
+			uow.registerDeleted(new List<SObject>{resultOpportunities.get(changedOppId).OpportunityLineItems[1].PricebookEntry}); // Delete PricebookEntry
+			uow.registerDeleted(new List<SObject>{resultOpportunities.get(changedOppId).OpportunityLineItems[1]}); // Delete OpportunityLine Item
 			// Register the same deletions more than once.
 			// This verifies that using a Map to back the deleted records collection prevents duplicate registration.
-			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1].PricebookEntry.Product2}); // Delete PricebookEntry Product 
-			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1].PricebookEntry}); // Delete PricebookEntry
-			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1]}); // Delete OpportunityLine Item
+			uow.registerDeleted(new List<SObject>{resultOpportunities.get(changedOppId).OpportunityLineItems[1].PricebookEntry.Product2}); // Delete PricebookEntry Product 
+			uow.registerDeleted(new List<SObject>{resultOpportunities.get(changedOppId).OpportunityLineItems[1].PricebookEntry}); // Delete PricebookEntry
+			uow.registerDeleted(new List<SObject>{resultOpportunities.get(changedOppId).OpportunityLineItems[1]}); // Delete OpportunityLine Item
 			uow.commitWork();
 		}
 		
@@ -164,11 +168,11 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 		// TODO: Need to re-instate this check with a better approach, as it is not possible when 
 		//       product triggers contribute to DML (e.g. in sample app Opportunity trigger)
 		// System.assertEquals(15, Limits.getDmlStatements());
-		mapOfOpps = new Map<Id, Opportunity>([select Id, Name, Description, (Select Id, PricebookEntry.Product2.Name, Quantity from OpportunityLineItems Order By PricebookEntry.Product2.Name) from Opportunity]);
+		resultOpportunities = new Map<Id, Opportunity>([select Id, Name, Description, (Select Id, PricebookEntry.Product2.Name, Quantity from OpportunityLineItems Order By PricebookEntry.Product2.Name) from Opportunity]);
 		List<Product2> prods = [Select Id from Product2 where Name = 'UoW Test Name 0 Changed : New Product'];
-		System.assertEquals(10, mapOfOpps.keySet().size());
-		System.assertEquals('This is a NEW Description', mapOfOpps.get(subjectOpportunityIds[0]).Description);
-		System.assertEquals(1, mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems.size()); // Should have deleted OpportunityLineItem added above
+		System.assertEquals(10, resultOpportunities.keySet().size());
+		System.assertEquals('This is a NEW Description', resultOpportunities.get(changedOppId).Description);
+		System.assertEquals(1, resultOpportunities.get(changedOppId).OpportunityLineItems.size()); // Should have deleted OpportunityLineItem added above
 		System.assertEquals(0, prods.size()); // Should have deleted Product added above
 	}
 	
@@ -318,7 +322,7 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 		FailDoingWorkException caughtEx = null;
 
 		try {
-			uow.commitWork();    
+			uow.commitWork();
 		}
 		catch (FailDoingWorkException fdwe) {
 			didFail = true;
