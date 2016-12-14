@@ -38,6 +38,8 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 	@isTest
 	private static void testUnitOfWorkNewDirtyDelete()
 	{
+		//create place to store Opportunities
+		List<Opportunity> listOfOpportunities = new List<Opportunity>();
 		// Insert Opporunities with UnitOfWork
 		{
 			fflib_SObjectUnitOfWork uow = new fflib_SObjectUnitOfWork(MY_SOBJECTS);
@@ -45,6 +47,7 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 			{
 				Opportunity opp = new Opportunity();
 				opp.Name = 'UoW Test Name ' + o;
+				opp.Description = 'This is a description '+ o;
 				opp.StageName = 'Open';
 				opp.CloseDate = System.today();
 				uow.registerNew(new List<SObject>{opp});
@@ -65,27 +68,36 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 					uow.registerRelationship(oppLineItem, OpportunityLineItem.PricebookEntryId, pbe);
 					uow.registerNew(oppLineItem, OpportunityLineItem.OpportunityId, opp);
 				}
+				listOfOpportunities.add(opp);
 			}
 			uow.commitWork();
 		}
+				
+		//get Ids
+		//manually create an ordered list of Ids
+		List<Id> subjectOpportunityIds = new List<Id>();
+		for(Opportunity subjectOpportunity : listOfOpportunities){
+			subjectOpportunityIds.add(subjectOpportunity.Id);
+		}
 		
 		// Assert Results 
-		assertResults('UoW');
+		assertResults(subjectOpportunityIds);
 		// TODO: Need to re-instate this check with a better approach, as it is not possible when 
 		//       product triggers contribute to DML (e.g. in sample app Opportunity trigger)
 		// System.assertEquals(5 /* Oddly a setSavePoint consumes a DML */, Limits.getDmlStatements());
 
 		// Records to update
-		List<Opportunity> opps = [select Id, Name, (Select Id from OpportunityLineItems) from Opportunity order by Name];
+		Map<Id, Opportunity> origMapOfOpps = new Map<Id, Opportunity>([select Id, Name, Description, (Select Id, Quantity, TotalPrice from OpportunityLineItems) from Opportunity where Id in :subjectOpportunityIds]);
 		
+		Product2 product;
 		// Update some records with UnitOfWork
 		{
 			fflib_SObjectUnitOfWork uow = new fflib_SObjectUnitOfWork(MY_SOBJECTS);	
-			Opportunity opp = opps[0];
-			opp.Name = opp.Name + ' Changed';
+			Opportunity opp = origMapOfOpps.get(subjectOpportunityIds[0]);
+			opp.Description = 'This is a NEW Description';
 			uow.registerDirty(new List<SObject>{opp});
-			Product2 product = new Product2();
-			product.Name = opp.Name + ' : New Product';
+			product = new Product2();
+			product.Name = 'New Product: ' + opp.Id;
 			uow.registerNew(new List<SObject>{product});
 			PricebookEntry pbe = new PricebookEntry();
 			pbe.UnitPrice = 10;
@@ -94,8 +106,9 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 			pbe.Pricebook2Id = Test.getStandardPricebookId();
 			uow.registerNew(pbe, PricebookEntry.Product2Id, product);
 			OpportunityLineItem newOppLineItem = new OpportunityLineItem();
-			newOppLineItem.Quantity = 1;
-			newOppLineItem.TotalPrice = 10;
+			origMapOfOpps.get(opp.Id).OpportunityLineItems.add(newOppLineItem);
+			newOppLineItem.Quantity = 3;
+			newOppLineItem.TotalPrice = 30;
 			uow.registerRelationship(newOppLineItem, OpportunityLineItem.PricebookEntryId, pbe);
 			uow.registerNew(newOppLineItem, OpportunityLineItem.OpportunityId, opp);
 			OpportunityLineItem existingOppLine = opp.OpportunityLineItems[0];
@@ -112,26 +125,38 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 		// TODO: Need to re-instate this check with a better approach, as it is not possible when 
 		//       product triggers contribute to DML (e.g. in sample app Opportunity trigger)
 		// System.assertEquals(11, Limits.getDmlStatements());
-		opps = [select Id, Name, (Select Id, PricebookEntry.Product2.Name, Quantity, TotalPrice from OpportunityLineItems Order By PricebookEntry.Product2.Name) from Opportunity order by Name];
-		System.assertEquals(10, opps.size());
-		//System.assertEquals('UoW Test Name 0 Changed', opps[0].Name);
-		//System.assertEquals(2, opps[0].OpportunityLineItems.size());
+		Map<Id, Opportunity> mapOfOpps = new Map<Id, Opportunity>([select Id, Name, Description, (Select Id, PricebookEntry.Product2.Name, Quantity, TotalPrice from OpportunityLineItems Order By Id) from Opportunity where Id in :origMapOfOpps.keySet()]);
+		System.assertEquals(10, mapOfOpps.keySet().size());
+		for(Opportunity originalOpportunity : origMapOfOpps.values()){
+			System.assertEquals(originalOpportunity.Description, mapOfOpps.get(originalOpportunity.Id).Description);
+			System.assertEquals(originalOpportunity.OpportunityLineItems.size(), mapOfOpps.get(originalOpportunity.id).OpportunityLineItems.size());
+			for(OpportunityLineItem originalLineItem : originalOpportunity.OpportunityLineItems){
+				Map<Id, OpportunityLineItem> mapOfLineItems = new Map<Id, OpportunityLineItem>(mapOfOpps.get(originalOpportunity.Id).OpportunityLineItems);
+				System.assertEquals(originalLineItem.Quantity, mapOfLineItems.get(originalLineItem.Id).Quantity);
+				System.assertEquals(originalLineItem.TotalPrice, mapOfLineItems.get(originalLineItem.Id).TotalPrice);
+			}
+		}
+		/**
+		System.assertEquals('This is a NEW Description', mapOfOpps.get(subjectOpportunityIds[0]).Description);
+		System.assertEquals(2, mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems.size());
 		// Verify that both fields were updated properly
-		//System.assertEquals(2, opps[0].OpportunityLineItems[0].Quantity);
-		//System.assertEquals(20, opps[0].OpportunityLineItems[0].TotalPrice);
-		//System.assertEquals('UoW Test Name 0 Changed : New Product', opps[0].OpportunityLineItems[1].PricebookEntry.Product2.Name);
+		System.assertEquals(1, mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[0].Quantity);
+		System.assertEquals(20, mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[0].TotalPrice);
+		**/
+		System.assertEquals('New Product: ' + subjectOpportunityIds[0], new Map<Id, OpportunityLineItem>(mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems).get(product.Id).PricebookEntry.Product2.Name);
 		
+
 		// Delete some records with the UnitOfWork
 		{
 			fflib_SObjectUnitOfWork uow = new fflib_SObjectUnitOfWork(MY_SOBJECTS);	
-			uow.registerDeleted(new List<SObject>{opps[0].OpportunityLineItems[1].PricebookEntry.Product2}); // Delete PricebookEntry Product 
-			uow.registerDeleted(new List<SObject>{opps[0].OpportunityLineItems[1].PricebookEntry}); // Delete PricebookEntry
-			uow.registerDeleted(new List<SObject>{opps[0].OpportunityLineItems[1]}); // Delete OpportunityLine Item
+			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1].PricebookEntry.Product2}); // Delete PricebookEntry Product 
+			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1].PricebookEntry}); // Delete PricebookEntry
+			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1]}); // Delete OpportunityLine Item
 			// Register the same deletions more than once.
 			// This verifies that using a Map to back the deleted records collection prevents duplicate registration.
-			uow.registerDeleted(new List<SObject>{opps[0].OpportunityLineItems[1].PricebookEntry.Product2}); // Delete PricebookEntry Product 
-			uow.registerDeleted(new List<SObject>{opps[0].OpportunityLineItems[1].PricebookEntry}); // Delete PricebookEntry
-			uow.registerDeleted(new List<SObject>{opps[0].OpportunityLineItems[1]}); // Delete OpportunityLine Item
+			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1].PricebookEntry.Product2}); // Delete PricebookEntry Product 
+			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1].PricebookEntry}); // Delete PricebookEntry
+			uow.registerDeleted(new List<SObject>{mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems[1]}); // Delete OpportunityLine Item
 			uow.commitWork();
 		}
 		
@@ -139,30 +164,29 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 		// TODO: Need to re-instate this check with a better approach, as it is not possible when 
 		//       product triggers contribute to DML (e.g. in sample app Opportunity trigger)
 		// System.assertEquals(15, Limits.getDmlStatements());
-		opps = [select Id, Name, (Select Id, PricebookEntry.Product2.Name, Quantity from OpportunityLineItems Order By PricebookEntry.Product2.Name) from Opportunity order by Name];
+		mapOfOpps = new Map<Id, Opportunity>([select Id, Name, Description, (Select Id, PricebookEntry.Product2.Name, Quantity from OpportunityLineItems Order By PricebookEntry.Product2.Name) from Opportunity]);
 		List<Product2> prods = [Select Id from Product2 where Name = 'UoW Test Name 0 Changed : New Product'];
-		System.assertEquals(10, opps.size());
-		//System.assertEquals('UoW Test Name 0 Changed', opps[0].Name);
-		//System.assertEquals(1, opps[0].OpportunityLineItems.size()); // Should have deleted OpportunityLineItem added above
+		System.assertEquals(10, mapOfOpps.keySet().size());
+		System.assertEquals('This is a NEW Description', mapOfOpps.get(subjectOpportunityIds[0]).Description);
+		System.assertEquals(1, mapOfOpps.get(subjectOpportunityIds[0]).OpportunityLineItems.size()); // Should have deleted OpportunityLineItem added above
 		System.assertEquals(0, prods.size()); // Should have deleted Product added above
 	}
 	
-	private static void assertResults(String prefix)
+	private static void assertResults(List<Id> subjectOpportunityIds)
 	{
 		// Standard Assertions on tests data inserted by tests
-		String filter = prefix + ' Test Name %';
-		List<Opportunity> opps = [select Id, Name, (Select Id from OpportunityLineItems) from Opportunity order by Name];
-		System.assertEquals(10, opps.size());
-		System.assertEquals(1, opps[0].OpportunityLineItems.size());
-		System.assertEquals(2, opps[1].OpportunityLineItems.size());
-		System.assertEquals(3, opps[2].OpportunityLineItems.size());
-		System.assertEquals(4, opps[3].OpportunityLineItems.size());
-		System.assertEquals(5, opps[4].OpportunityLineItems.size());
-		System.assertEquals(6, opps[5].OpportunityLineItems.size());
-		System.assertEquals(7, opps[6].OpportunityLineItems.size());
-		System.assertEquals(8, opps[7].OpportunityLineItems.size());
-		System.assertEquals(9, opps[8].OpportunityLineItems.size());
-		System.assertEquals(10, opps[9].OpportunityLineItems.size());
+		Map<Id, Opportunity> opps = new Map<Id, Opportunity>([select Id, Name, (Select Id from OpportunityLineItems) from Opportunity where Id in :subjectOpportunityIds]);
+		System.assertEquals(10, opps.keySet().size());
+		System.assertEquals(1, opps.get(subjectOpportunityIds[0]).OpportunityLineItems.size());
+		System.assertEquals(2, opps.get(subjectOpportunityIds[1]).OpportunityLineItems.size());
+		System.assertEquals(3, opps.get(subjectOpportunityIds[2]).OpportunityLineItems.size());
+		System.assertEquals(4, opps.get(subjectOpportunityIds[3]).OpportunityLineItems.size());
+		System.assertEquals(5, opps.get(subjectOpportunityIds[4]).OpportunityLineItems.size());
+		System.assertEquals(6, opps.get(subjectOpportunityIds[5]).OpportunityLineItems.size());
+		System.assertEquals(7, opps.get(subjectOpportunityIds[6]).OpportunityLineItems.size());
+		System.assertEquals(8, opps.get(subjectOpportunityIds[7]).OpportunityLineItems.size());
+		System.assertEquals(9, opps.get(subjectOpportunityIds[8]).OpportunityLineItems.size());
+		System.assertEquals(10, opps.get(subjectOpportunityIds[9]).OpportunityLineItems.size());
 	}
 
 	/**
@@ -176,6 +200,8 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 	@isTest
 	private static void testDerivedUnitOfWork_CommitSuccess() 
 	{
+		//create place to store Opportunities
+		List<Opportunity> listOfOpportunities = new List<Opportunity>();
 		// Insert Opporunities with UnitOfWork
 		DerivedUnitOfWork uow = new DerivedUnitOfWork(MY_SOBJECTS);
 		for(Integer o=0; o<10; o++)
@@ -202,11 +228,18 @@ private with sharing class fflib_SObjectUnitOfWorkTest
 				uow.registerRelationship(oppLineItem, OpportunityLineItem.PricebookEntryId, pbe);
 				uow.registerNew(oppLineItem, OpportunityLineItem.OpportunityId, opp);
 			}
+			listOfOpportunities.add(opp);
 		}
 		uow.commitWork();
-		
+		//get Ids
+		//manually create an ordered list of Ids
+		List<Id>  subjectOpportunityIds = new List<Id>();
+		for(Opportunity subjectOpportunity : listOfOpportunities){
+			subjectopportunityIds.add(subjectOpportunity.Id);
+		}
+
 		// Assert Results 
-		assertResults('UoW');
+		assertResults(subjectOpportunityIds);
 
 		assertEvents(new List<String> {
 				'onCommitWorkStarting'
